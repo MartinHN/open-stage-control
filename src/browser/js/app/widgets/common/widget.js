@@ -158,6 +158,9 @@ class Widget extends EventEmitter {
         // cache props (resolve @{props})
         this.cachedProps = {}
 
+        // used to coalesce prop changes
+        this.changedPropSet = {}
+
         for (var k in this.props) {
             if (k != 'widgets' && k != 'tabs') {
                 this.cachedProps[k] = this.resolveProp(k, undefined, true)
@@ -171,44 +174,7 @@ class Widget extends EventEmitter {
             this.errors.id = 'There can only be one root'
         }
 
-        if (Object.keys(this.linkedProps).length) {
-
-            widgetManager.on('widget-created', (e)=>{
-                var {id, widget, options} = e
-                if (widget == this.parent) return
-                if (widget == this) id = 'this'
-                if (this.linkedProps[id]) {
-                    this.updateProps(this.linkedProps[id], widget, options)
-                }
-            }, {context: this})
-
-            widgetManager.on('prop-changed', (e)=>{
-                let {id, widget, options} = e
-                if (widget == this) id = 'this'
-                if (widget == this.parent) id = 'parent'
-                if (this.linkedProps[id]) {
-                    this.updateProps(this.linkedProps[id], widget, options, e.props)
-                }
-            }, {context: this})
-
-        }
-
-        if (Object.keys(this.linkedPropsValue).length) {
-
-            widgetManager.on('change', (e)=>{
-                var {id, widget, options} = e
-                if (widget == this) id = 'this'
-                if (widget == this.parent) id = 'parent'
-                if (this.linkedPropsValue[id]) {
-                    this.updateProps(this.linkedPropsValue[id], widget, options, ['value'])
-                }
-            }, {context: this})
-
-        }
-
-        var selfLinkedOSCProps = (this.linkedPropsValue['this'] || []).filter(i=>OSCProps.indexOf(i) > -1)
-        this.selfLinkedOSCProps = selfLinkedOSCProps.length ? selfLinkedOSCProps : false
-
+        this.createLinkedPropsListeners()
 
         this.disabledProps = []
 
@@ -321,6 +287,60 @@ class Widget extends EventEmitter {
     }
 
     getSplit() {}
+
+    removeLinkedPropsListeners(){
+        if (Object.keys(this.linkedProps).length) {
+            widgetManager.removeEventContext(this,'widget-created')
+            widgetManager.removeEventContext(this,'prop-changed')
+        }
+
+        if (Object.keys(this.linkedPropsValue).length) {
+            widgetManager.removeEventContext(this,'change')
+        }
+
+    }
+
+    createLinkedPropsListeners(){
+
+        if (Object.keys(this.linkedProps).length) {
+
+            widgetManager.on('widget-created', (e)=>{
+                var {id, widget, options} = e
+                if (widget == this.parent) return
+                if (widget == this) id = 'this'
+                if (this.linkedProps[id]) {
+                    this.updateProps(this.linkedProps[id], widget, options)
+                }
+            }, {context: this})
+
+            widgetManager.on('prop-changed', (e)=>{
+                let {id, widget, options} = e
+                if (widget == this) id = 'this'
+                if (widget == this.parent) id = 'parent'
+                if (this.linkedProps[id]) {
+                    this.updateProps(this.linkedProps[id], widget, options, e.props)
+                }
+            }, {context: this})
+
+        }
+
+        if (Object.keys(this.linkedPropsValue).length) {
+
+            widgetManager.on('change', (e)=>{
+                var {id, widget, options} = e
+                if (widget == this) id = 'this'
+                if (widget == this.parent) id = 'parent'
+                if (this.linkedPropsValue[id]) {
+                    this.updateProps(this.linkedPropsValue[id], widget, options, ['value'])
+                }
+            }, {context: this})
+
+        }
+
+        var selfLinkedOSCProps = (this.linkedPropsValue['this'] || []).filter(i=>OSCProps.indexOf(i) > -1)
+        this.selfLinkedOSCProps = selfLinkedOSCProps.length ? selfLinkedOSCProps : false
+
+    }
 
     resolveProp(propName, propValue, storeLinks=true, originalWidget, originalPropName, context) {
 
@@ -444,6 +464,7 @@ class Widget extends EventEmitter {
                     }
                 } else {
                     this.oscReceivers[address].setAddress(resolvedAddress)
+                    this.oscReceivers[address].addProp(propName)
                 }
 
                 var r = this.oscReceivers[address].value
@@ -514,6 +535,103 @@ class Widget extends EventEmitter {
         return this.cachedProps[propName]
     }
 
+
+    startPropChangeSet(name,options){
+        // finalize a list of change made with startPropChangeSet('name');setProp ... ;applyPropChange()
+        this.changedSetName = name
+        this.changedSetOptions = options || {}
+    }
+
+    setProp(propName,propValue,options) {
+        // if a changeSet is still active, the property will not be updated after this call
+        // options = * isResolved: the value is already returned from resolveProp 
+        options = options ||{}
+        const changed = options.isResolved?propValue!=this.getProp(propName) : !deepEqual(propValue,this.props[propName])
+        if(!changed){return }
+
+        const changeInfo = {propName,propValue,isResolved:options.isResolved}
+
+        const changedSetName= this.changedSetName
+        if(changedSetName){
+            if (!this.changedPropSet[changedSetName])this.changedPropSet[changedSetName] =[]
+            this.changedPropSet[changedSetName].push(changeInfo)
+        }
+        
+        else{
+            this._applyChangedProps([changeInfo],options)
+        }
+    }
+
+    applyPropChangeSet(){
+        // finalize a list of change made with startPropChangeSet('name');setProp ... ;applyPropChange()
+        const changedSetName = this.changedSetName
+        const changedProps = this.changedPropSet[changedSetName]
+        if (changedProps){
+            this._applyChangedProps(this.changedPropSet[changedSetName],options)
+            delete this.changedPropSet[changedSetName] 
+        }
+        this.changedSetOptions = {}
+        this.changedSetName = null
+    }
+
+    _applyChangedProps(changedProps,options={}){
+        // this function propagates change from a list of props to be changed
+        // a prop to be changed is an object as {propName,propValue[,isResolved]}
+        // using isResolved allow to propagate change from an already resolved propValue, i.e. the result, not the original prop definition
+
+        if(!changedProps || changedProps.length==0) return
+        this.removeLinkedPropsListeners()
+        for (var i in changedProps) {
+            const {propName,propValue,isResolved}  = changedProps[i]
+            const oldPropValue = this.getProp(propName)
+            changedProps[i].oldPropValue = oldPropValue
+
+
+            const isComputed =!isResolved && (typeof propValue == 'string' && (propValue.includes("@{") || propValue.includes("OSC{") || propValue.includes("#{")))
+            const oldPropDefinition = this.props[propName]
+            let newValue = propValue
+            if(!isResolved){
+                // clean Linked ids associated with the rebuilded prop
+                function cleanIdsForPropName(props){
+                    for(var id in props){
+                        const idx = props[id].indexOf(propName)
+                        if(idx>=0){props[id].splice(idx,1)}
+                        if( props[id].length==0){delete props[id]}
+                    }
+                }
+                cleanIdsForPropName(this.linkedProps)
+                cleanIdsForPropName(this.linkedPropsValue)
+                
+                // we clear out any oscReciever corresponding to this prop
+                for(var io in this.oscReceivers){
+                    const o = this.oscReceivers[io]
+                    const idx = o.propNames.indexOf(propName)
+                    if(idx){o.splice(idx,1)}
+                    if(o.propNames.length==0){
+                        delete this.oscReceivers[io]
+                    }
+                }
+
+                this.props[propName] = propValue
+                // we resolve property now if needed
+                if(isComputed )
+                    newValue = this.resolveProp(propName,propValue,true)
+
+            }
+            this.cachedProps[propName] = newValue
+            this.onPropChanged(propName, options, oldPropValue)
+        }
+        this.createLinkedPropsListeners()
+
+        this.trigger('prop-changed', [{
+                id: this.getProp('id'),
+                props: changedProps,
+                widget: this,
+                options: options
+            }])
+
+    }
+
     updateProps(propNames, widget, options, updatedProps = []) {
 
         if (propNames.includes('value')) {
@@ -540,8 +658,7 @@ class Widget extends EventEmitter {
 
                 } else {
 
-                    this.cachedProps[propName] = propValue
-                    changedProps.push({propName, oldPropValue})
+                    changedProps.push({propName, propValue,isResolved:true})
 
                 }
 
@@ -555,16 +672,7 @@ class Widget extends EventEmitter {
 
         } else if (changedProps.length) {
 
-            for (var i in changedProps) {
-                this.onPropChanged(changedProps[i].propName, options, changedProps[i].oldPropValue)
-            }
-
-            widgetManager.trigger('prop-changed', [{
-                id: this.getProp('id'),
-                props: changedProps,
-                widget: this,
-                options: options
-            }])
+            this._applyChangedProps(changedProps,options)
 
         }
 
