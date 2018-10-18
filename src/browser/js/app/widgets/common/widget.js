@@ -567,7 +567,7 @@ class Widget extends EventEmitter {
         const changedSetName = this.changedSetName
         const changedProps = this.changedPropSet[changedSetName]
         if (changedProps){
-            this._applyChangedProps(this.changedPropSet[changedSetName],options)
+            this._applyChangedProps(this.changedPropSet[changedSetName],this.changedSetOptions)
             delete this.changedPropSet[changedSetName] 
         }
         this.changedSetOptions = {}
