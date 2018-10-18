@@ -2,6 +2,7 @@ var widgetManager = require('../managers/widgets'),
     resize = require('../events/resize'),
     stateManager = require('../managers/state'),
     parser = require('../parser'),
+    {deepCopy, deepEqual} = require('../utils'),
     Panel,
     sidepanel,
     editor,
@@ -16,6 +17,29 @@ function updateWidget(widget, options={}) {
 
     var reuseChildren = options.reuseChildren !== false && widget instanceof Panel
 
+    if(!options.forceRecreation ){
+        // check first if only dynamic props have changed
+        const changedObj = getChangedProps(widget);
+        if(!nonDynamicPropChanged(changedObj)){
+
+
+            function triggerChange(changedObj){
+                const {widget,childrens,changed} = changedObj
+                for(var i in childrens){
+                    triggerChange(childrens[i])
+                }
+                widget.startPropChangeSet('updateWidget')
+                for(var i in changed){
+                    widget.setProp(changedProps[i].propName,changedProps[i].propValue, {isResolved:true})
+                }
+                widget.applyPropChangeSet()
+            }
+            triggerChange(changedObj)
+            return widget
+        }
+
+
+    }
     // save state
     if (stateManager.queueCounter === 0) {
         sidepanelScroll = sidepanel.scrollTop
@@ -124,6 +148,37 @@ function updateWidget(widget, options={}) {
     }
 
     return newWidget
+
+}
+
+
+function nonDynamicPropChanged(changedObj){
+    for(var k of changedObj.changedProps){
+        if(!changedObj.widget.constructor.dynamicProps.includes(k.propName)){
+            return true
+        }
+    }
+    for(var o of changedObj.childrens){
+        if(nonDynamicPropChanged(o)){return true}
+
+    }
+}
+
+function getChangedProps(widget){
+    const res = {widget,'changedProps':[],'childrens':[]}
+    for(var propName in widget.cachedProps){
+        const oldPropValue = widget.cachedProps[propName]
+        const propValue = widget.resolveProp(propName, undefined, false)
+        if(!deepEqual(propValue,oldPropValue)){
+            res.changedProps.push({propName,oldPropValue,propValue})
+        }
+    }
+
+    for( var c in widget.childrens){
+        res.childrens.push(getChangedProps(widget.children[c]))
+    }
+
+    return res;
 
 }
 
