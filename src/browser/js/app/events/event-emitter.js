@@ -94,15 +94,17 @@ module.exports = class EventEmitter extends WolfyEventEmitter {
 
     }
 
-    removeEventContext(context) {
+    removeEventContext(context,evt) {
 
         var events = this._contextEvents[context.hash]
 
         if (events) {
             for (var i = 0; i < events.length; i++) {
-                this.removeListener(events[i][0], events[i][1])
+                if(!evt || events[i][0]==evt){
+                    this.removeListener(events[i][0], events[i][1])
+                }
             }
-            delete this._contextEvents[context.hash]
+            if(this._contextEvents[context.hash].length==0) delete this._contextEvents[context.hash]
         }
 
     }
