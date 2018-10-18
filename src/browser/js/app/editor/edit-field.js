@@ -88,7 +88,7 @@ module.exports = function editField(editor, widget, propName, defaultValue){
 
         var onChange = ()=>{
 
-            input.removeEventListener('change', onChange)
+            //input.removeEventListener('change', onChange)
 
             var v
 
@@ -100,12 +100,52 @@ module.exports = function editField(editor, widget, propName, defaultValue){
 
             var newWidgets = []
             for (var w of editor.selectedWidgets) {
-                w.props[propName] = v !== '' ? v : deepCopy(defaultValue.value)
-                newWidgets.push(updateWidget(w, {preventSelect: editor.selectedWidgets.length > 1}))
+                const targetV = v !== '' ? v : deepCopy(defaultValue.value)
+                if (dynamic) {
+                    w.setProp(propName, targetV,{fromEditor:true})
+                    newWidgets.push(w)
+                }
+                else{
+                    w.props[propName] = targetV
+                    newWidgets.push(updateWidget(w, {forceRecreation:true,preventSelect: editor.selectedWidgets.length > 1}))
+                }
             }
             editor.pushHistory()
             if (newWidgets.length > 1) editor.select(newWidgets)
 
+        }
+        if (dynamic) {
+            const feedbackCb = e=>{
+                const {id,props,options} = e;
+
+                if (widget.hash === e.widget.hash) {
+
+                    if (props.find(el=>el.propName == propName)) {
+                        input.value = '' + widget.props[propName]
+                    }
+                }
+            }
+
+            widget.on('prop-changed', feedbackCb)
+            var observer = new MutationObserver((mutations)=>{
+                // check for removed target
+                mutations.forEach(function(mutation) {
+                    var nodes = Array.from(mutation.removedNodes);
+                    if (nodes.length) {
+                        var directMatch = nodes.indexOf(input) > -1
+                        var parentMatch = nodes.some(parent=>parent.contains(input));
+                        if (directMatch || parentMatch) {
+                            widget.off('prop-changed', feedbackCb);
+                        }
+                    }
+                });
+            }
+            );
+
+            observer.observe(document.getElementById('sidepanel'), {
+                subtree: true,
+                childList: true
+            })
         }
 
         input.addEventListener('change', onChange)
