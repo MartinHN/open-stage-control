@@ -41,9 +41,10 @@ class Clone extends Container {
         this.bindTarget(this.getCloneTarget())
         if (this.cloneTarget) this.createClone(true)
 
-        // global listenner to catch cloneTarget's creation if no target is locked
+        // global listener to catch cloneTarget's creation if no target is locked
         widgetManager.on('widget-created', (e)=>{
-
+            // don't care if we've already a cloneTarget
+            if(this.cloneTarget) return
             var {id, widget} = e
 
             if (id === this.getProp('widgetId') && this.isValidCloneTarget(widget)) {
@@ -205,14 +206,59 @@ class Clone extends Container {
 
         clone.props = data
 
-        if (changedProps.some(x => !clone.constructor.dynamicProps.includes(x))) {
+        const hasNonDynamicChange = (_delta,target)=>{
+
+            const changed = Object.keys(_delta)
+            const index = changed.indexOf("widgets");
+            if (index !== -1) changed.splice(index, 1);
+            // check if non dynamicprop has changed
+            let nonDynamicChange = changed.some(x => !target.constructor.dynamicProps.includes(x) )
+            if(nonDynamicChange) return true // early return
+            // apply recursively
+            if(_delta.widgets){
+                for(var i in _delta.widgets){
+                    if(i!=="_t"){ // avoid deltas type _t:"a" (array)
+                        const w =target.children[i]
+                        if(!w)return true // should never happen
+                        nonDynamicChange |= hasNonDynamicChange(_delta.widgets[i],w)
+                        if(nonDynamicChange) return true // early return
+                    }
+                }
+            }
+            return nonDynamicChange
+        }
+
+        const nonDynamicChange = hasNonDynamicChange(delta,this.cloneTarget)
+
+        if (nonDynamicChange) {
 
             clone.reCreateWidget({reuseChildren: false})
             this.updateContainer(false)
 
         } else {
 
-            clone.updateProps(changedProps, this)
+            const updateChilds=(c,_delta)=>{
+
+                let changed = Object.keys(_delta)
+                const index = changed.indexOf("widgets");
+                if (index !== -1) changed.splice(index, 1);
+
+                // apply prop
+                for (var ch of changed){c.props[ch] = _delta[ch][1]}
+                c.updateProps(changed, c)
+
+                // recurse
+                if(c.children && _delta.widgets){
+                    for (var i in _delta.widgets){
+                        if(i!=="_t"){ // avoid deltas type _t:"a" (array)
+                            updateChilds(c.children[i],_delta.widgets[i])
+                        }
+                    }
+                }
+            }
+
+            updateChilds(clone,delta)
+
             this.updateContainer(true)
 
         }
