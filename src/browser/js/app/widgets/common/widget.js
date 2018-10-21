@@ -375,16 +375,34 @@ class Widget extends EventEmitter {
         var variables = {},
             mathscope = context || {},
             varnumber = 0
-
+        const findBrack = (s,cb)=>{
+            var nest = -1,start=0,newS=''
+            for(var l in s){
+                var i = parseInt(l)
+                var c = s[i]
+                if(c=='@' && nest==-1){
+                    nest = 0
+                    start=i
+                }
+                if(nest!=-1){
+                    if(c=='{'){nest+=1 }
+                    else if(c=='}'){nest-=1 }
+                }
+                if(nest==0 && i>start){newS+=cb(s.substr(start,i-start+1));nest=-1;}
+                else if(nest==-1){newS+=c}
+            }
+            return newS
+        }
         if (typeof propValue == 'string') {
 
-            propValue = propValue.replace(/@\{(?:[^{}]|(@\{[^{}]*\}))*\}/g, (m, nested)=>{
+            propValue = findBrack(propValue, (m)=>{
+                var nested = m.substr(2, m.length - 3)
 
-                if (nested) {
-                    m = m.replace(nested, this.resolveProp(propName, nested, false, this))
+                if (nested && nested.includes('@')) {
+                    nested =  this.resolveProp(propName, nested, false, this)
                 }
 
-                let id = m.substr(2, m.length - 3).split('.'),
+                let id = nested.split('.'),
                     k, subk
 
                 if (id.length > 1) {
